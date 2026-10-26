@@ -1,0 +1,1629 @@
+// AI Chrona / EduCore — Prisma schema
+// Platform Foundation + Phase 2 Authentication entities
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Platform / Tenant
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id               String       @id @default(uuid()) @db.Uuid
+  code             String       @db.VarChar(50)
+  name             String       @db.VarChar(255)
+  status           TenantStatus @default(ACTIVE)
+  subscriptionTier String?      @map("subscription_tier") @db.VarChar(50)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt        DateTime?    @map("deleted_at") @db.Timestamptz
+
+  users                      User[]
+  refreshTokens              RefreshToken[]
+  passwordResetTokens        PasswordResetToken[]
+  activationTokens           ActivationToken[]
+  loginHistory               LoginHistory[]
+  mfaFactors                 MfaFactor[]
+  externalIdentities         ExternalIdentity[]
+  identityProviders          IdentityProvider[]
+  roles                      Role[]
+  userRoles                  UserRole[]
+  registrationRequests       RegistrationRequest[]
+  institutions               Institution[]
+  campuses                   Campus[]
+  userCampusAssignments      UserCampusAssignment[]
+  admissionApplications      AdmissionApplication[]
+  parentStudentRelationships ParentStudentRelationship[]
+  brandingProfiles           BrandingProfile[]
+  brandingAssets             BrandingAsset[]
+  auditLogs                  AuditLog[]
+  academicYears              AcademicYear[]
+  departments                Department[]
+  programs                   Program[]
+  courses                    Course[]
+  subjects                   Subject[]
+  curricula                  Curriculum[]
+  semesters                  Semester[]
+  calendarEvents             CalendarEvent[]
+  hrmsCategories             HrmsCategory[]
+  hrmsDepartments            HrmsDepartment[]
+  staff                      Staff[]
+  staffDocuments             StaffDocument[]
+  serviceEvents              ServiceEvent[]
+  certifications             Certification[]
+  leaveTypes                 LeaveType[]
+  leaveBalances              LeaveBalance[]
+  leaveRequests              LeaveRequest[]
+  leaveApprovalSteps         LeaveApprovalStep[]
+  shifts                     Shift[]
+  shiftAssignments           ShiftAssignment[]
+  attendanceRecords          AttendanceRecord[]
+  appraisalCycles            AppraisalCycle[]
+  appraisalMetricTemplates   AppraisalMetricTemplate[]
+  appraisalReviews           AppraisalReview[]
+  appraisalReviewMetrics     AppraisalReviewMetric[]
+  appraisalComments          AppraisalComment[]
+
+  @@unique([code])
+  @@index([status])
+  @@map("tenants")
+}
+
+enum TenantStatus {
+  PENDING
+  ACTIVE
+  TRIAL
+  SUSPENDED
+  EXPIRED
+  ARCHIVED
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id               String      @id @default(uuid()) @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  email            String      @db.VarChar(255)
+  mobile           String?     @db.VarChar(20)
+  passwordHash     String?     @map("password_hash") @db.VarChar(255)
+  personaType      PersonaType @map("persona_type")
+  status           UserStatus  @default(ACTIVE)
+  mfaEnabled       Boolean     @default(false) @map("mfa_enabled")
+  failedLoginCount Int         @default(0) @map("failed_login_count")
+  lockedUntil      DateTime?   @map("locked_until") @db.Timestamptz
+  lastLoginAt      DateTime?   @map("last_login_at") @db.Timestamptz
+  activatedAt      DateTime?   @map("activated_at") @db.Timestamptz
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz
+
+  tenant                Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  refreshTokens         RefreshToken[]
+  passwordResetTokens   PasswordResetToken[]
+  activationTokens      ActivationToken[]
+  loginHistory          LoginHistory[]
+  mfaFactors            MfaFactor[]
+  externalIdentities    ExternalIdentity[]
+  userRoles             UserRole[]
+  registrationRequests  RegistrationRequest[]
+  admissionApplications AdmissionApplication[]
+  parentRelationships   ParentStudentRelationship[] @relation("ParentUser")
+  studentRelationships  ParentStudentRelationship[] @relation("StudentUser")
+  campusAssignments     UserCampusAssignment[]
+  staff                 Staff[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, status])
+  @@map("users")
+}
+
+enum PersonaType {
+  STAFF
+  STUDENT
+  PARENT
+  EXTERNAL
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+  SUSPENDED
+}
+
+// ---------------------------------------------------------------------------
+// Auth: Refresh tokens (hashed at rest; rotation / session tracking)
+// ---------------------------------------------------------------------------
+
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  tokenHash  String    @map("token_hash") @db.VarChar(255)
+  familyId   String    @map("family_id") @db.Uuid
+  deviceInfo String?   @map("device_info") @db.VarChar(512)
+  ipAddress  String?   @map("ip_address") @db.VarChar(64)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tokenHash])
+  @@index([userId, tenantId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Auth: Password reset tokens (hashed, single-use, expiring)
+// ---------------------------------------------------------------------------
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Auth: Account activation tokens (hashed, single-use, expiring)
+// ---------------------------------------------------------------------------
+
+model ActivationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("activation_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Auth: Login history (append-only audit of authentication attempts)
+// ---------------------------------------------------------------------------
+
+model LoginHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  tenantId  String?  @map("tenant_id") @db.Uuid
+  email     String?  @db.VarChar(255)
+  success   Boolean
+  reason    String?  @db.VarChar(100)
+  ipAddress String?  @map("ip_address") @db.VarChar(64)
+  userAgent String?  @map("user_agent") @db.VarChar(512)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([createdAt])
+  @@map("login_history")
+}
+
+// ---------------------------------------------------------------------------
+// MFA: Permanent factors (TOTP secrets encrypted at rest — never plaintext)
+// ---------------------------------------------------------------------------
+
+model MfaFactor {
+  id              String          @id @default(uuid()) @db.Uuid
+  userId          String          @map("user_id") @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  type            MfaFactorType
+  status          MfaFactorStatus @default(PENDING)
+  displayName     String?         @map("display_name") @db.VarChar(100)
+  /// AES-GCM encrypted TOTP secret (base64 ciphertext blob). Never store plaintext.
+  encryptedSecret String?         @map("encrypted_secret") @db.Text
+  verifiedAt      DateTime?       @map("verified_at") @db.Timestamptz
+  lastUsedAt      DateTime?       @map("last_used_at") @db.Timestamptz
+  disabledAt      DateTime?       @map("disabled_at") @db.Timestamptz
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([userId, tenantId, status])
+  @@index([userId, type])
+  @@map("mfa_factors")
+}
+
+enum MfaFactorType {
+  TOTP
+  SMS
+  EMAIL
+  WEBAUTHN
+}
+
+enum MfaFactorStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+  REVOKED
+}
+
+// ---------------------------------------------------------------------------
+// SSO: External identity link (provider + subject is the stable key)
+// ---------------------------------------------------------------------------
+
+model ExternalIdentity {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  provider        String    @db.VarChar(50)
+  providerSubject String    @map("provider_subject") @db.VarChar(255)
+  email           String?   @db.VarChar(255)
+  lastLoginAt     DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, provider, providerSubject])
+  @@index([userId])
+  @@index([email])
+  @@map("external_identities")
+}
+
+// ---------------------------------------------------------------------------
+// SSO: Tenant-scoped identity provider configuration (secrets via env/secrets mgr)
+// ---------------------------------------------------------------------------
+
+model IdentityProvider {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  provider    String   @db.VarChar(50)
+  enabled     Boolean  @default(false)
+  issuer      String?  @db.VarChar(512)
+  clientId    String?  @map("client_id") @db.VarChar(255)
+  /// Reference key into secrets manager / env — NOT the secret value
+  secretRef   String?  @map("secret_ref") @db.VarChar(255)
+  metadataUrl String?  @map("metadata_url") @db.VarChar(1024)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId, enabled])
+  @@map("identity_providers")
+}
+
+// ---------------------------------------------------------------------------
+// Role catalog (authorization identity — NOT personaType)
+// Permissions / RolePermission deferred to RBAC phase.
+// ---------------------------------------------------------------------------
+
+model Role {
+  id                              String   @id @default(uuid()) @db.Uuid
+  /// Stable machine code e.g. STUDENT, PRINCIPAL — never use displayName for auth
+  code                            String   @db.VarChar(50)
+  displayName                     String   @map("display_name") @db.VarChar(100)
+  description                     String?  @db.VarChar(500)
+  /// SELF | INVITATION | ADMIN_ONLY
+  registrationMode                String   @map("registration_mode") @db.VarChar(30)
+  selfRegistrationAllowed         Boolean  @default(false) @map("self_registration_allowed")
+  invitationRequired              Boolean  @default(true) @map("invitation_required")
+  administratorAssignmentRequired Boolean  @default(false) @map("administrator_assignment_required")
+  isSystem                        Boolean  @default(true) @map("is_system")
+  isActive                        Boolean  @default(true) @map("is_active")
+  /// Optional default persona for UX only — not authorization
+  defaultPersonaType              String?  @map("default_persona_type") @db.VarChar(30)
+  /// null = platform-wide catalog entry; set for tenant overrides later
+  tenantId                        String?  @map("tenant_id") @db.Uuid
+  createdAt                       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant               Tenant?               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  userRoles            UserRole[]
+  registrationRequests RegistrationRequest[]
+  rolePermissions      RolePermission[]
+
+  @@unique([code, tenantId])
+  @@index([isActive, selfRegistrationAllowed])
+  @@map("roles")
+}
+
+model UserRole {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  roleId     String    @map("role_id") @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  /// PENDING | ACTIVE | REVOKED
+  status     String    @default("PENDING") @db.VarChar(20)
+  assignedAt DateTime? @map("assigned_at") @db.Timestamptz
+  assignedBy String?   @map("assigned_by") @db.Uuid
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, roleId, tenantId])
+  @@index([tenantId, roleId])
+  @@index([userId, status])
+  @@map("user_roles")
+}
+
+/// Privileged / invitation registration requests — does NOT grant role by itself
+model RegistrationRequest {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  email           String    @db.VarChar(255)
+  requestedRoleId String    @map("requested_role_id") @db.Uuid
+  /// PENDING | APPROVED | REJECTED | EXPIRED
+  status          String    @default("PENDING") @db.VarChar(20)
+  /// Optional link to user if pre-provisioned
+  userId          String?   @map("user_id") @db.Uuid
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant        Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  requestedRole Role   @relation(fields: [requestedRoleId], references: [id], onDelete: Restrict)
+  user          User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, email])
+  @@index([status])
+  @@map("registration_requests")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC foundation — Permission catalog + RolePermission
+// Full admin UI / evaluation engine expansion deferred.
+// ---------------------------------------------------------------------------
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// Stable code e.g. identity.user.read — never use displayName for auth
+  code        String   @unique @db.VarChar(100)
+  displayName String   @map("display_name") @db.VarChar(150)
+  description String?  @db.VarChar(500)
+  module      String   @db.VarChar(50)
+  action      String   @db.VarChar(30)
+  isSystem    Boolean  @default(true) @map("is_system")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  rolePermissions RolePermission[]
+
+  @@index([module, isActive])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// ---------------------------------------------------------------------------
+// Institution — belongs to exactly one Tenant (Sprint 1 Institution Management)
+// Campus deferred until source requirements establish a separate entity.
+// ---------------------------------------------------------------------------
+
+model Institution {
+  id              String            @id @default(uuid()) @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  institutionCode String            @map("institution_code") @db.VarChar(50)
+  name            String            @db.VarChar(255)
+  legalName       String?           @map("legal_name") @db.VarChar(255)
+  institutionType String?           @map("institution_type") @db.VarChar(50)
+  status          InstitutionStatus @default(ACTIVE)
+  email           String?           @db.VarChar(255)
+  phone           String?           @db.VarChar(30)
+  website         String?           @db.VarChar(255)
+  addressLine1    String?           @map("address_line1") @db.VarChar(255)
+  addressLine2    String?           @map("address_line2") @db.VarChar(255)
+  city            String?           @db.VarChar(100)
+  state           String?           @db.VarChar(100)
+  postalCode      String?           @map("postal_code") @db.VarChar(20)
+  country         String?           @db.VarChar(100)
+  timezone        String?           @db.VarChar(50)
+  locale          String?           @db.VarChar(20)
+  currency        String?           @db.VarChar(10)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt       DateTime?         @map("deleted_at") @db.Timestamptz
+
+  tenant                     Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  brandingProfiles           BrandingProfile[]
+  brandingAssets             BrandingAsset[]
+  admissionApplications      AdmissionApplication[]
+  campuses                   Campus[]
+  userCampusAssignments      UserCampusAssignment[]
+  parentStudentRelationships ParentStudentRelationship[]
+  academicYears              AcademicYear[]
+  departments                Department[]
+  programs                   Program[]
+  courses                    Course[]
+  subjects                   Subject[]
+  curricula                  Curriculum[]
+  semesters                  Semester[]
+  calendarEvents             CalendarEvent[]
+  staff                      Staff[]
+
+  @@unique([tenantId, institutionCode])
+  @@index([tenantId, status])
+  @@index([tenantId])
+  @@map("institutions")
+}
+
+enum InstitutionStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+// ---------------------------------------------------------------------------
+// White-label branding (Institution-owned; Tenant can hold defaults later)
+// Theme templates = system reference data. Assets metadata only — binaries in S3.
+// ---------------------------------------------------------------------------
+
+model ThemeTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(100)
+  description String?  @db.VarChar(500)
+  /// JSON design tokens (colors, typography) — applied by copy into BrandingProfile
+  tokensJson  Json     @map("tokens_json")
+  isActive    Boolean  @default(true) @map("is_active")
+  isSystem    Boolean  @default(true) @map("is_system")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([isActive, sortOrder])
+  @@map("theme_templates")
+}
+
+model BrandingProfile {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  institutionId  String    @map("institution_id") @db.Uuid
+  /// DRAFT | PUBLISHED
+  status         String    @default("DRAFT") @db.VarChar(20)
+  displayName    String?   @map("display_name") @db.VarChar(255)
+  shortName      String?   @map("short_name") @db.VarChar(100)
+  welcomeMessage String?   @map("welcome_message") @db.VarChar(500)
+  /// Applied template code (reference only)
+  templateCode   String?   @map("template_code") @db.VarChar(50)
+  /// Effective tokens JSON (copied from template + customizations)
+  tokensJson     Json      @map("tokens_json")
+  logoAssetId    String?   @map("logo_asset_id") @db.Uuid
+  faviconAssetId String?   @map("favicon_asset_id") @db.Uuid
+  loginBgAssetId String?   @map("login_bg_asset_id") @db.Uuid
+  version        Int       @default(1)
+  publishedAt    DateTime? @map("published_at") @db.Timestamptz
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution Institution       @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  versions    BrandingVersion[]
+
+  @@unique([institutionId, status])
+  @@index([tenantId, institutionId])
+  @@map("branding_profiles")
+}
+
+model BrandingVersion {
+  id                String   @id @default(uuid()) @db.Uuid
+  brandingProfileId String   @map("branding_profile_id") @db.Uuid
+  version           Int
+  status            String   @db.VarChar(20)
+  tokensJson        Json     @map("tokens_json")
+  summary           String?  @db.VarChar(255)
+  createdBy         String?  @map("created_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  profile BrandingProfile @relation(fields: [brandingProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([brandingProfileId, version])
+  @@index([brandingProfileId])
+  @@map("branding_versions")
+}
+
+model BrandingAsset {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  institutionId String   @map("institution_id") @db.Uuid
+  /// LOGO | FAVICON | LOGIN_BACKGROUND | WATERMARK | THEME_PREVIEW
+  assetType     String   @map("asset_type") @db.VarChar(50)
+  objectKey     String   @map("object_key") @db.VarChar(512)
+  contentType   String   @map("content_type") @db.VarChar(100)
+  sizeBytes     Int      @map("size_bytes")
+  checksum      String?  @db.VarChar(128)
+  originalName  String?  @map("original_name") @db.VarChar(255)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, institutionId, assetType])
+  @@map("branding_assets")
+}
+
+// ---------------------------------------------------------------------------
+// Admissions CRM foundation (Sprint 1)
+// Application pipeline only — enrollment/student record creation is later SIS phase.
+// ---------------------------------------------------------------------------
+
+model AdmissionApplication {
+  id              String          @id @default(uuid()) @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  institutionId   String          @map("institution_id") @db.Uuid
+  /// Authenticated applicant who owns this application (nullable for staff-created CRM records)
+  applicantUserId String?         @map("applicant_user_id") @db.Uuid
+  applicationNo   String          @map("application_no") @db.VarChar(50)
+  status          AdmissionStatus @default(SUBMITTED)
+  /// Applicant identity (pre-enrollment — not a User account unless linked later)
+  firstName       String          @map("first_name") @db.VarChar(100)
+  lastName        String          @map("last_name") @db.VarChar(100)
+  email           String          @db.VarChar(255)
+  phone           String?         @db.VarChar(30)
+  dateOfBirth     DateTime?       @map("date_of_birth") @db.Date
+  programApplied  String?         @map("program_applied") @db.VarChar(150)
+  academicYear    String?         @map("academic_year") @db.VarChar(20)
+  notes           String?         @db.VarChar(1000)
+  submittedAt     DateTime?       @map("submitted_at") @db.Timestamptz
+  reviewedAt      DateTime?       @map("reviewed_at") @db.Timestamptz
+  decidedAt       DateTime?       @map("decided_at") @db.Timestamptz
+  decidedBy       String?         @map("decided_by") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt       DateTime?       @map("deleted_at") @db.Timestamptz
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  applicant   User?       @relation(fields: [applicantUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, applicationNo])
+  @@index([tenantId, institutionId, status])
+  @@index([tenantId, email])
+  @@index([institutionId, status])
+  @@index([applicantUserId, tenantId])
+  @@map("admission_applications")
+}
+
+enum AdmissionStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+// ---------------------------------------------------------------------------
+// Parent ↔ Student relationship (portal authorization scope)
+// Does NOT grant roles. Created only via controlled workflows (not public self-link).
+// ---------------------------------------------------------------------------
+
+model ParentStudentRelationship {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  parentUserId     String   @map("parent_user_id") @db.Uuid
+  studentUserId    String   @map("student_user_id") @db.Uuid
+  institutionId    String?  @map("institution_id") @db.Uuid
+  /// FATHER | MOTHER | GUARDIAN | OTHER
+  relationshipType String   @map("relationship_type") @db.VarChar(30)
+  /// ACTIVE | INACTIVE | PENDING | REVOKED
+  status           String   @default("PENDING") @db.VarChar(20)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  parentUser  User         @relation("ParentUser", fields: [parentUserId], references: [id], onDelete: Cascade)
+  studentUser User         @relation("StudentUser", fields: [studentUserId], references: [id], onDelete: Cascade)
+  institution Institution? @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, parentUserId, studentUserId])
+  @@index([tenantId, parentUserId, status])
+  @@index([tenantId, studentUserId, status])
+  @@map("parent_student_relationships")
+}
+
+// ---------------------------------------------------------------------------
+// Campus (PRD hierarchy Level 3) — under Tenant + Institution
+// ABAC: PRINCIPAL own campus, etc. Full ABAC resource tables deferred.
+// ---------------------------------------------------------------------------
+
+model Campus {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  institutionId String       @map("institution_id") @db.Uuid
+  code          String       @db.VarChar(50)
+  name          String       @db.VarChar(200)
+  status        CampusStatus @default(ACTIVE)
+  addressLine1  String?      @map("address_line1") @db.VarChar(200)
+  city          String?      @db.VarChar(100)
+  state         String?      @db.VarChar(100)
+  country       String?      @db.VarChar(100)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt     DateTime?    @map("deleted_at") @db.Timestamptz
+
+  tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution       Institution            @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  userAssignments   UserCampusAssignment[]
+  staff             Staff[]
+  shifts            Shift[]
+  attendanceRecords AttendanceRecord[]
+
+  @@unique([tenantId, institutionId, code])
+  @@index([tenantId, status])
+  @@index([institutionId, status])
+  @@map("campuses")
+}
+
+enum CampusStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+// ---------------------------------------------------------------------------
+// Platform audit log (PRD Ch.2.25 / Ch.23) — append-oriented application events
+// Never store secrets, tokens, passwords, MFA secrets.
+// Future: edu.sp_audit_log_create | edu.sp_audit_log_list
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String?  @map("tenant_id") @db.Uuid
+  actorUserId   String?  @map("actor_user_id") @db.Uuid
+  action        String   @db.VarChar(100)
+  module        String   @db.VarChar(50)
+  entityType    String?  @map("entity_type") @db.VarChar(80)
+  entityId      String?  @map("entity_id") @db.VarChar(80)
+  result        String   @default("SUCCESS") @db.VarChar(20)
+  correlationId String?  @map("correlation_id") @db.VarChar(80)
+  ipAddress     String?  @map("ip_address") @db.VarChar(64)
+  userAgent     String?  @map("user_agent") @db.VarChar(500)
+  /// Safe metadata only — sanitized by AuditService
+  metadata      Json?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, module, action])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}
+
+// User ↔ Campus assignment for ABAC (PRD Principal/own-campus, multi-campus staff)
+// Future: edu.sp_user_campus_assignment_create | edu.sp_user_campus_assignment_get
+
+model UserCampusAssignment {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  institutionId String   @map("institution_id") @db.Uuid
+  campusId      String   @map("campus_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  /// ACTIVE | INACTIVE | REVOKED
+  status        String   @default("ACTIVE") @db.VarChar(20)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  campus      Campus      @relation(fields: [campusId], references: [id], onDelete: Restrict)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, campusId])
+  @@index([tenantId, userId, status])
+  @@index([campusId, status])
+  @@map("user_campus_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 2 — Academic Year & Session (foundation for Academic Management)
+// Future SP: edu.sp_academic_year_list | edu.sp_academic_year_upsert | edu.sp_academic_year_set_active
+// ---------------------------------------------------------------------------
+
+enum AcademicYearStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model AcademicYear {
+  id            String             @id @default(uuid()) @db.Uuid
+  tenantId      String             @map("tenant_id") @db.Uuid
+  institutionId String             @map("institution_id") @db.Uuid
+  /// Display label e.g. 2026-27
+  code          String             @db.VarChar(20)
+  name          String?            @db.VarChar(100)
+  startDate     DateTime           @map("start_date") @db.Date
+  endDate       DateTime           @map("end_date") @db.Date
+  status        AcademicYearStatus @default(INACTIVE)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt     DateTime?          @map("deleted_at") @db.Timestamptz
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution     Institution      @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  curricula       Curriculum[]
+  semesters       Semester[]
+  calendarEvents  CalendarEvent[]
+  leaveBalances   LeaveBalance[]
+  leaveRequests   LeaveRequest[]
+  appraisalCycles AppraisalCycle[]
+
+  @@unique([tenantId, institutionId, code])
+  @@index([tenantId, institutionId, status])
+  @@index([tenantId, status])
+  @@map("academic_years")
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 2 — Academic Departments
+// Future SP: edu.sp_department_list | edu.sp_department_upsert | edu.sp_department_archive
+// Programs linkage added when Programs module lands.
+// ---------------------------------------------------------------------------
+
+enum DepartmentStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model Department {
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @map("tenant_id") @db.Uuid
+  institutionId String           @map("institution_id") @db.Uuid
+  code          String           @db.VarChar(30)
+  name          String           @db.VarChar(150)
+  description   String?          @db.VarChar(500)
+  status        DepartmentStatus @default(ACTIVE)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt     DateTime?        @map("deleted_at") @db.Timestamptz
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution     Institution      @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  programs        Program[]
+  hrmsDepartments HrmsDepartment[]
+
+  @@unique([tenantId, institutionId, code])
+  @@index([tenantId, institutionId, status])
+  @@index([tenantId, status])
+  @@map("departments")
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 2 — Programs → Courses → Subjects
+// Hierarchy: Institution → Department → Program → Course → Subject
+// ---------------------------------------------------------------------------
+
+enum ProgramStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum CourseStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum SubjectStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model Program {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  institutionId String        @map("institution_id") @db.Uuid
+  departmentId  String        @map("department_id") @db.Uuid
+  code          String        @db.VarChar(30)
+  name          String        @db.VarChar(200)
+  description   String?       @db.VarChar(500)
+  status        ProgramStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt     DateTime?     @map("deleted_at") @db.Timestamptz
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution Institution  @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  department  Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  courses     Course[]
+  curricula   Curriculum[]
+
+  @@unique([tenantId, institutionId, code])
+  @@index([tenantId, departmentId, status])
+  @@index([tenantId, institutionId, status])
+  @@map("programs")
+}
+
+model Course {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  institutionId String       @map("institution_id") @db.Uuid
+  programId     String       @map("program_id") @db.Uuid
+  code          String       @db.VarChar(30)
+  name          String       @db.VarChar(200)
+  description   String?      @db.VarChar(500)
+  credits       Int?
+  status        CourseStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt     DateTime?    @map("deleted_at") @db.Timestamptz
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution     Institution        @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  program         Program            @relation(fields: [programId], references: [id], onDelete: Restrict)
+  subjects        Subject[]
+  curriculumItems CurriculumCourse[]
+
+  @@unique([tenantId, programId, code])
+  @@index([tenantId, programId, status])
+  @@index([tenantId, institutionId, status])
+  @@map("courses")
+}
+
+model Subject {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  institutionId String        @map("institution_id") @db.Uuid
+  courseId      String        @map("course_id") @db.Uuid
+  code          String        @db.VarChar(30)
+  name          String        @db.VarChar(200)
+  description   String?       @db.VarChar(500)
+  sequence      Int           @default(0)
+  status        SubjectStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt     DateTime?     @map("deleted_at") @db.Timestamptz
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  course      Course      @relation(fields: [courseId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, courseId, code])
+  @@index([tenantId, courseId, status])
+  @@index([tenantId, institutionId, status])
+  @@map("subjects")
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 2 — Curriculum Configuration, Semester/Term, Academic Calendar
+// Curriculum: Program + Academic Year structure; courses mapped via CurriculumCourse
+// Semester: periods within Academic Year
+// CalendarEvent: institution calendar events tied to Academic Year (optional Semester)
+// ---------------------------------------------------------------------------
+
+enum CurriculumStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum SemesterStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum CalendarEventStatus {
+  SCHEDULED
+  CANCELLED
+  ARCHIVED
+}
+
+enum CalendarEventType {
+  HOLIDAY
+  BREAK
+  EXAM
+  EVENT
+  OTHER
+}
+
+model Curriculum {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  institutionId  String           @map("institution_id") @db.Uuid
+  programId      String           @map("program_id") @db.Uuid
+  academicYearId String           @map("academic_year_id") @db.Uuid
+  code           String           @db.VarChar(40)
+  name           String           @db.VarChar(200)
+  description    String?          @db.VarChar(500)
+  status         CurriculumStatus @default(DRAFT)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt      DateTime?        @map("deleted_at") @db.Timestamptz
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution  Institution        @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  program      Program            @relation(fields: [programId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear       @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  courses      CurriculumCourse[]
+
+  @@unique([tenantId, programId, academicYearId, code])
+  @@index([tenantId, institutionId, status])
+  @@index([tenantId, academicYearId, status])
+  @@map("curricula")
+}
+
+model CurriculumCourse {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  curriculumId String   @map("curriculum_id") @db.Uuid
+  courseId     String   @map("course_id") @db.Uuid
+  sequence     Int      @default(0)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  curriculum Curriculum @relation(fields: [curriculumId], references: [id], onDelete: Cascade)
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: Restrict)
+
+  @@unique([curriculumId, courseId])
+  @@index([tenantId, curriculumId])
+  @@map("curriculum_courses")
+}
+
+model Semester {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  institutionId  String         @map("institution_id") @db.Uuid
+  academicYearId String         @map("academic_year_id") @db.Uuid
+  code           String         @db.VarChar(30)
+  name           String         @db.VarChar(100)
+  sequence       Int            @default(1)
+  startDate      DateTime       @map("start_date") @db.Date
+  endDate        DateTime       @map("end_date") @db.Date
+  status         SemesterStatus @default(ACTIVE)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt      DateTime?      @map("deleted_at") @db.Timestamptz
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution    Institution     @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  academicYear   AcademicYear    @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  calendarEvents CalendarEvent[]
+
+  @@unique([tenantId, academicYearId, code])
+  @@index([tenantId, academicYearId, status])
+  @@index([tenantId, institutionId, status])
+  @@map("semesters")
+}
+
+model CalendarEvent {
+  id             String              @id @default(uuid()) @db.Uuid
+  tenantId       String              @map("tenant_id") @db.Uuid
+  institutionId  String              @map("institution_id") @db.Uuid
+  academicYearId String              @map("academic_year_id") @db.Uuid
+  semesterId     String?             @map("semester_id") @db.Uuid
+  title          String              @db.VarChar(200)
+  eventType      CalendarEventType   @default(EVENT) @map("event_type")
+  description    String?             @db.VarChar(500)
+  startDate      DateTime            @map("start_date") @db.Date
+  endDate        DateTime            @map("end_date") @db.Date
+  status         CalendarEventStatus @default(SCHEDULED)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt      DateTime?           @map("deleted_at") @db.Timestamptz
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution  Institution  @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  semester     Semester?    @relation(fields: [semesterId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, academicYearId, startDate])
+  @@index([tenantId, institutionId, status])
+  @@index([tenantId, eventType])
+  @@map("calendar_events")
+}
+
+// ---------------------------------------------------------------------------
+// HRMS module
+// ---------------------------------------------------------------------------
+
+// ===========================================================================
+// Enums
+// ===========================================================================
+
+enum StaffStatus {
+  ACTIVE
+  ON_LEAVE
+  PROBATION
+  SEPARATED
+}
+
+enum HrmsLookupStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum StaffDocumentStatus {
+  PENDING_REVIEW
+  VERIFIED
+  EXPIRED
+}
+
+enum CertificationStatus {
+  VALID
+  EXPIRING
+  EXPIRED
+}
+
+enum LeaveRequestStatus {
+  PENDING_MANAGER
+  PENDING_HR
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveDecision {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Who is acting in an approval step: a reporting-chain manager or HR
+enum LeaveApproverKind {
+  APPLICANT
+  MANAGER
+  HR
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  ON_LEAVE
+}
+
+enum AppraisalStage {
+  SELF_REVIEW
+  HOD_REVIEW
+  PRINCIPAL_REVIEW
+  HR_CLOSED
+}
+
+enum AppraisalRating {
+  OUTSTANDING
+  EXCEEDS_EXPECTATIONS
+  MEETS_EXPECTATIONS
+  NEEDS_IMPROVEMENT
+}
+
+// ===========================================================================
+// E3 — Setup lookups (HrmsSetupPage)
+// Kept separate from academic `Department`: HR departments include
+// non-academic units (Human Resources, Accounts, Laboratory).
+// ===========================================================================
+
+model HrmsCategory {
+  id         String           @id @default(uuid()) @db.Uuid
+  tenantId   String           @map("tenant_id") @db.Uuid
+  /// e.g. "Teaching", "Non-Teaching". Appraisal metric templates key off this.
+  name       String           @db.VarChar(100)
+  isTeaching Boolean          @default(false) @map("is_teaching")
+  status     HrmsLookupStatus @default(ACTIVE)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt  DateTime?        @map("deleted_at") @db.Timestamptz
+
+  tenant                   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff                    Staff[]
+  appraisalMetricTemplates AppraisalMetricTemplate[]
+
+  /// Case-insensitive uniqueness: enforce via a unique index on lower(name) in the SQL migration
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("hrms_categories")
+}
+
+model HrmsDepartment {
+  id                   String           @id @default(uuid()) @db.Uuid
+  tenantId             String           @map("tenant_id") @db.Uuid
+  name                 String           @db.VarChar(150)
+  /// Optional bridge to the academic Department when the HR unit is also an academic one
+  academicDepartmentId String?          @map("academic_department_id") @db.Uuid
+  /// Head of department — used as the HOD reviewer in appraisals
+  headStaffId          String?          @map("head_staff_id") @db.Uuid
+  status               HrmsLookupStatus @default(ACTIVE)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt            DateTime?        @map("deleted_at") @db.Timestamptz
+
+  tenant             Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  academicDepartment Department? @relation(fields: [academicDepartmentId], references: [id], onDelete: SetNull)
+  head               Staff?      @relation("DepartmentHead", fields: [headStaffId], references: [id], onDelete: SetNull)
+  staff              Staff[]     @relation("StaffDepartment")
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("hrms_departments")
+}
+
+// ===========================================================================
+// E2 — Staff directory (StaffListPage / StaffFormPage / StaffDetailPage)
+// ===========================================================================
+
+model Staff {
+  id                 String      @id @default(uuid()) @db.Uuid
+  tenantId           String      @map("tenant_id") @db.Uuid
+  institutionId      String      @map("institution_id") @db.Uuid
+  campusId           String      @map("campus_id") @db.Uuid
+  /// Linked platform login. Resolved by email for My Portal (`ensureSelfStaff`).
+  userId             String?     @map("user_id") @db.Uuid
+  /// EMP-#### generated per tenant
+  employeeCode       String      @map("employee_code") @db.VarChar(30)
+  fullName           String      @map("full_name") @db.VarChar(200)
+  email              String      @db.VarChar(255)
+  phone              String?     @db.VarChar(20)
+  categoryId         String      @map("category_id") @db.Uuid
+  departmentId       String      @map("department_id") @db.Uuid
+  designation        String      @db.VarChar(150)
+  /// Frontend stores the manager's NAME; the API must use this FK instead.
+  /// Null = reports to Principal / top of chain (leave goes straight to HR).
+  reportingManagerId String?     @map("reporting_manager_id") @db.Uuid
+  joiningDate        DateTime    @map("joining_date") @db.Date
+  separationDate     DateTime?   @map("separation_date") @db.Date
+  status             StaffStatus @default(ACTIVE)
+  qualification      String?     @db.VarChar(255)
+  experienceYears    Decimal     @default(0) @map("experience_years") @db.Decimal(4, 1)
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt          DateTime?   @map("deleted_at") @db.Timestamptz
+
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  institution       Institution      @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  campus            Campus           @relation(fields: [campusId], references: [id], onDelete: Restrict)
+  user              User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  category          HrmsCategory     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  department        HrmsDepartment   @relation("StaffDepartment", fields: [departmentId], references: [id], onDelete: Restrict)
+  reportingManager  Staff?           @relation("ReportingLine", fields: [reportingManagerId], references: [id], onDelete: SetNull)
+  directReports     Staff[]          @relation("ReportingLine")
+  headedDepartments HrmsDepartment[] @relation("DepartmentHead")
+
+  documents        StaffDocument[]
+  serviceEvents    ServiceEvent[]
+  certifications   Certification[]
+  leaveBalances    LeaveBalance[]
+  leaveRequests    LeaveRequest[]      @relation("LeaveApplicant")
+  pendingApprovals LeaveRequest[]      @relation("LeaveCurrentApprover")
+  leaveSteps       LeaveApprovalStep[]
+  shiftAssignments ShiftAssignment[]
+  attendance       AttendanceRecord[]
+  appraisals       AppraisalReview[]
+
+  @@unique([tenantId, employeeCode])
+  @@unique([tenantId, email])
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+  @@index([tenantId, campusId, status])
+  @@index([tenantId, departmentId])
+  @@index([tenantId, categoryId])
+  @@index([reportingManagerId])
+  @@map("staff")
+}
+
+model StaffDocument {
+  id           String              @id @default(uuid()) @db.Uuid
+  tenantId     String              @map("tenant_id") @db.Uuid
+  staffId      String              @map("staff_id") @db.Uuid
+  /// Appointment Letter | Aadhaar | PAN | Degree Certificate | Experience Letter | ID Proof
+  type         String              @db.VarChar(60)
+  name         String              @db.VarChar(255)
+  /// Object-storage key. The vault holds identity documents (Aadhaar, PAN):
+  /// encrypt at rest, restrict to HR admin, and never log the identifier values.
+  storageKey   String?             @map("storage_key") @db.VarChar(500)
+  mimeType     String?             @map("mime_type") @db.VarChar(100)
+  uploadedAt   DateTime            @default(now()) @map("uploaded_at") @db.Timestamptz
+  uploadedById String?             @map("uploaded_by_id") @db.Uuid
+  expiryDate   DateTime?           @map("expiry_date") @db.Date
+  status       StaffDocumentStatus @default(PENDING_REVIEW)
+  verifiedById String?             @map("verified_by_id") @db.Uuid
+  verifiedAt   DateTime?           @map("verified_at") @db.Timestamptz
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt    DateTime?           @map("deleted_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, staffId])
+  @@index([tenantId, status])
+  /// Dashboard "expiring items"
+  @@index([tenantId, expiryDate])
+  @@map("staff_documents")
+}
+
+/// Service history: Joined, Promoted, Transferred, Confirmed, Separated...
+model ServiceEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  staffId     String   @map("staff_id") @db.Uuid
+  eventDate   DateTime @map("event_date") @db.Date
+  title       String   @db.VarChar(200)
+  detail      String?  @db.VarChar(1000)
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, staffId, eventDate])
+  @@map("service_events")
+}
+
+model Certification {
+  id         String              @id @default(uuid()) @db.Uuid
+  tenantId   String              @map("tenant_id") @db.Uuid
+  staffId    String              @map("staff_id") @db.Uuid
+  name       String              @db.VarChar(200)
+  issuer     String?             @db.VarChar(200)
+  issuedOn   DateTime?           @map("issued_on") @db.Date
+  validUntil DateTime?           @map("valid_until") @db.Date
+  /// Derive EXPIRING/EXPIRED from validUntil in a nightly job; stored for filtering
+  status     CertificationStatus @default(VALID)
+  createdAt  DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt  DateTime?           @map("deleted_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, staffId])
+  @@index([tenantId, validUntil])
+  @@map("certifications")
+}
+
+// ===========================================================================
+// E4 — Leave management (LeaveListPage / LeaveFormPage / LeaveDetailPage)
+// ===========================================================================
+
+/// Leave type master. Frontend hardcodes Casual / Sick / Earned / On Duty /
+/// Compensatory Off; new staff get Casual 12, Sick 8, Earned 12.
+model LeaveType {
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  code               String           @db.VarChar(30)
+  name               String           @db.VarChar(100)
+  /// Default annual entitlement applied when balances are initialised. Null = no balance tracked (e.g. On Duty).
+  defaultEntitlement Decimal?         @map("default_entitlement") @db.Decimal(5, 1)
+  /// Whether approval deducts from LeaveBalance
+  deductsBalance     Boolean          @default(true) @map("deducts_balance")
+  status             HrmsLookupStatus @default(ACTIVE)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  balances LeaveBalance[]
+  requests LeaveRequest[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@map("leave_types")
+}
+
+model LeaveBalance {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  staffId        String   @map("staff_id") @db.Uuid
+  leaveTypeId    String   @map("leave_type_id") @db.Uuid
+  /// Balances reset per academic year
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  entitled       Decimal  @db.Decimal(5, 1)
+  /// Incremented on HR approval. remaining = entitled - used (compute, don't store).
+  used           Decimal  @default(0) @db.Decimal(5, 1)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff        Staff        @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+
+  @@unique([staffId, leaveTypeId, academicYearId])
+  @@index([tenantId, academicYearId])
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id                String             @id @default(uuid()) @db.Uuid
+  tenantId          String             @map("tenant_id") @db.Uuid
+  staffId           String             @map("staff_id") @db.Uuid
+  leaveTypeId       String             @map("leave_type_id") @db.Uuid
+  academicYearId    String             @map("academic_year_id") @db.Uuid
+  fromDate          DateTime           @map("from_date") @db.Date
+  toDate            DateTime           @map("to_date") @db.Date
+  /// Inclusive day count, computed server-side (never trust the client)
+  days              Decimal            @db.Decimal(5, 1)
+  reason            String             @db.VarChar(1000)
+  status            LeaveRequestStatus @default(PENDING_MANAGER)
+  /// Set while PENDING_MANAGER; null when PENDING_HR (HR queue) or closed
+  currentApproverId String?            @map("current_approver_id") @db.Uuid
+  appliedAt         DateTime           @default(now()) @map("applied_at") @db.Timestamptz
+  decidedAt         DateTime?          @map("decided_at") @db.Timestamptz
+  /// Set when HR deducts balance, so a cancel/reversal can restore it exactly once
+  balanceDeducted   Boolean            @default(false) @map("balance_deducted")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff           Staff               @relation("LeaveApplicant", fields: [staffId], references: [id], onDelete: Restrict)
+  currentApprover Staff?              @relation("LeaveCurrentApprover", fields: [currentApproverId], references: [id], onDelete: SetNull)
+  leaveType       LeaveType           @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  academicYear    AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  steps           LeaveApprovalStep[]
+
+  @@index([tenantId, status, appliedAt])
+  @@index([tenantId, staffId, fromDate])
+  /// Manager inbox: status = PENDING_MANAGER AND current_approver_id = me
+  @@index([tenantId, currentApproverId, status])
+  @@map("leave_requests")
+}
+
+/// Timeline: Submitted → each manager → HR. Append-only.
+model LeaveApprovalStep {
+  id             String            @id @default(uuid()) @db.Uuid
+  tenantId       String            @map("tenant_id") @db.Uuid
+  leaveRequestId String            @map("leave_request_id") @db.Uuid
+  sequence       Int
+  approverKind   LeaveApproverKind @map("approver_kind")
+  /// Null when HR acts as a role rather than as a named staff member
+  actorStaffId   String?           @map("actor_staff_id") @db.Uuid
+  actorUserId    String?           @map("actor_user_id") @db.Uuid
+  /// Snapshot of display name at time of action (staff may be renamed/separated later)
+  actorName      String            @map("actor_name") @db.VarChar(200)
+  decision       LeaveDecision
+  comment        String?           @db.VarChar(1000)
+  actedAt        DateTime          @default(now()) @map("acted_at") @db.Timestamptz
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  leaveRequest LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  actorStaff   Staff?       @relation(fields: [actorStaffId], references: [id], onDelete: SetNull)
+
+  @@unique([leaveRequestId, sequence])
+  @@index([tenantId, leaveRequestId])
+  @@map("leave_approval_steps")
+}
+
+// ===========================================================================
+// E6 — Shifts & attendance (AttendancePage)
+// ===========================================================================
+
+model Shift {
+  id           String           @id @default(uuid()) @db.Uuid
+  tenantId     String           @map("tenant_id") @db.Uuid
+  campusId     String           @map("campus_id") @db.Uuid
+  name         String           @db.VarChar(100)
+  /// "HH:mm" wall-clock times in the campus timezone. Overnight shifts: endTime < startTime.
+  startTime    String           @map("start_time") @db.VarChar(5)
+  endTime      String           @map("end_time") @db.VarChar(5)
+  /// Minutes after startTime before check-in is marked LATE
+  graceMinutes Int              @default(15) @map("grace_minutes")
+  status       HrmsLookupStatus @default(ACTIVE)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt    DateTime?        @map("deleted_at") @db.Timestamptz
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  campus      Campus             @relation(fields: [campusId], references: [id], onDelete: Restrict)
+  assignments ShiftAssignment[]
+  attendance  AttendanceRecord[]
+
+  @@unique([tenantId, campusId, name])
+  @@index([tenantId, campusId, status])
+  @@map("shifts")
+}
+
+/// Drives the "assigned" count shown on each shift card
+model ShiftAssignment {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  shiftId       String    @map("shift_id") @db.Uuid
+  staffId       String    @map("staff_id") @db.Uuid
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  shift  Shift  @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([shiftId, staffId, effectiveFrom])
+  @@index([tenantId, staffId, effectiveFrom])
+  @@map("shift_assignments")
+}
+
+model AttendanceRecord {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  staffId        String           @map("staff_id") @db.Uuid
+  campusId       String           @map("campus_id") @db.Uuid
+  shiftId        String?          @map("shift_id") @db.Uuid
+  attendanceDate DateTime         @map("attendance_date") @db.Date
+  status         AttendanceStatus
+  checkInAt      DateTime?        @map("check_in_at") @db.Timestamptz
+  checkOutAt     DateTime?        @map("check_out_at") @db.Timestamptz
+  /// Set when status = ON_LEAVE from an approved request
+  leaveRequestId String?          @map("leave_request_id") @db.Uuid
+  /// MANUAL (HR grid) | LEAVE_SYNC | DEVICE — leaves room for biometric/geo later
+  source         String           @default("MANUAL") @db.VarChar(20)
+  remarks        String?          @db.VarChar(500)
+  markedById     String?          @map("marked_by_id") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  campus Campus @relation(fields: [campusId], references: [id], onDelete: Restrict)
+  shift  Shift? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@unique([staffId, attendanceDate])
+  @@index([tenantId, attendanceDate, status])
+  @@index([tenantId, campusId, attendanceDate])
+  @@map("attendance_records")
+}
+
+// ===========================================================================
+// E7 — Performance appraisal (AppraisalListPage / AppraisalDetailPage)
+// Flow: Self → HOD → Principal → HR Closed. 1–5 scores per metric.
+// final = mean(self, hod, principal) of the weighted scores.
+// Rating bands: >=4.5 Outstanding, >=3.8 Exceeds, >=3.0 Meets, else Needs Improvement.
+// ===========================================================================
+
+model AppraisalCycle {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  academicYearId String?  @map("academic_year_id") @db.Uuid
+  /// e.g. "Annual Appraisal 2026-27"
+  name           String   @db.VarChar(150)
+  startDate      DateTime @map("start_date") @db.Date
+  endDate        DateTime @map("end_date") @db.Date
+  isOpen         Boolean  @default(true) @map("is_open")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear?     @relation(fields: [academicYearId], references: [id], onDelete: SetNull)
+  reviews      AppraisalReview[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isOpen])
+  @@map("appraisal_cycles")
+}
+
+/// Template metrics per staff category (TEACHING_METRICS / NON_TEACHING_METRICS).
+/// Copied into AppraisalReviewMetric when a review is created.
+model AppraisalMetricTemplate {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  categoryId String   @map("category_id") @db.Uuid
+  name       String   @db.VarChar(150)
+  /// Weights for a category should sum to 100 (validate in service)
+  weight     Int
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  category HrmsCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, name])
+  @@index([tenantId, categoryId])
+  @@map("appraisal_metric_templates")
+}
+
+model AppraisalReview {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  cycleId        String           @map("cycle_id") @db.Uuid
+  staffId        String           @map("staff_id") @db.Uuid
+  stage          AppraisalStage   @default(SELF_REVIEW)
+  selfScore      Decimal?         @map("self_score") @db.Decimal(3, 1)
+  hodScore       Decimal?         @map("hod_score") @db.Decimal(3, 1)
+  principalScore Decimal?         @map("principal_score") @db.Decimal(3, 1)
+  finalScore     Decimal?         @map("final_score") @db.Decimal(3, 1)
+  finalRating    AppraisalRating? @map("final_rating")
+  closedAt       DateTime?        @map("closed_at") @db.Timestamptz
+  closedById     String?          @map("closed_by_id") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant   Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  cycle    AppraisalCycle          @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  staff    Staff                   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  metrics  AppraisalReviewMetric[]
+  comments AppraisalComment[]
+
+  @@unique([cycleId, staffId])
+  @@index([tenantId, cycleId, stage])
+  @@index([tenantId, staffId])
+  @@map("appraisal_reviews")
+}
+
+model AppraisalReviewMetric {
+  id             String @id @default(uuid()) @db.Uuid
+  tenantId       String @map("tenant_id") @db.Uuid
+  reviewId       String @map("review_id") @db.Uuid
+  name           String @db.VarChar(150)
+  /// Snapshot of weight at creation so later template edits don't alter closed reviews
+  weight         Int
+  sortOrder      Int    @default(0) @map("sort_order")
+  /// 1–5; null until that stage has scored (enforce CHECK 1..5 in migration)
+  selfScore      Int?   @map("self_score") @db.SmallInt
+  hodScore       Int?   @map("hod_score") @db.SmallInt
+  principalScore Int?   @map("principal_score") @db.SmallInt
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  review AppraisalReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, name])
+  @@index([reviewId])
+  @@map("appraisal_review_metrics")
+}
+
+model AppraisalComment {
+  id           String         @id @default(uuid()) @db.Uuid
+  tenantId     String         @map("tenant_id") @db.Uuid
+  reviewId     String         @map("review_id") @db.Uuid
+  stage        AppraisalStage
+  authorUserId String?        @map("author_user_id") @db.Uuid
+  comment      String         @db.VarChar(2000)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  review AppraisalReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId, createdAt])
+  @@map("appraisal_comments")
+}

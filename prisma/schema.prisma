@@ -1,0 +1,596 @@
+// backend/prisma/schema.prisma
+// MyCampace Enterprise Education OS — Relational Schema for PostgreSQL (AWS RDS)
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// 1. TENANT & PLATFORM FOUNDATION
+// -------------------------------------------------------------
+
+enum OnboardingStatus {
+  Pending
+  InProgress
+  Completed
+}
+
+enum VerificationStatus {
+  Draft
+  Submitted
+  Approved
+  Rejected
+}
+
+enum DocumentReviewStatus {
+  Pending
+  Accepted
+  Rejected
+}
+
+/// Verification document uploaded during onboarding. File bytes live in private storage,
+/// never in PostgreSQL; `storageKey` is a random server-generated key.
+model OrganizationDocument {
+  id             String               @id @default(uuid())
+  organizationId String
+  docType        String               // key from the server-side document catalog
+  campusId       String?              // set for per-campus documents
+  originalName   String
+  storageKey     String               @unique
+  mimeType       String               // determined by server-side signature sniffing
+  sizeBytes      Int
+  checksum       String
+  reviewStatus   DocumentReviewStatus @default(Pending)
+  reviewNote     String?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  uploadedById   String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, docType])
+}
+
+model Organization {
+  id              String               @id @default(uuid())
+  name            String
+  legalName       String?
+  code            String               @unique
+  logoUrl         String?
+  type            String               // School, College, University, Group
+  country         String               @default("India")
+  state           String
+  city            String
+  address         String?
+  postalCode      String?
+  taxId           String?
+  primaryContact  Json?
+  domains         String[]             @default([])
+  branding        Json?                // Primary colors, custom domains
+  academicContext Json?                // Active academic year, term
+  onboardingStatus OnboardingStatus    @default(Pending)
+  onboardingStep   Int                 @default(1)
+
+  // Superadmin verification gate: ERP access requires Approved.
+  verificationStatus       VerificationStatus @default(Draft)
+  verificationSubmittedAt  DateTime?
+  verificationReviewedAt   DateTime?
+  verificationReviewedById String?
+  verificationNote         String?            // decline reason (or approval remark)
+  verificationRound        Int                @default(0) // incremented on every (re)submission
+  applicationId            String?            @unique // public reference, e.g. MC-2026-7KQ4M2; assigned on first submission, never changes
+
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  documents       OrganizationDocument[]
+  institutions    Institution[]
+  entitlements    ProductEntitlement[]
+  users           User[]
+  auditLogs       AuditLog[]
+  teamInvites     TeamInvite[]
+}
+
+model Institution {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  name               String
+  code               String
+  type               String       // K-12, Higher Ed, Coaching
+  affiliation        String?      // CBSE, UGC, AICTE
+  registrationNumber String?
+  email              String?
+  phone              String?
+  status             String       @default("Active")
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campuses           Campus[]
+  academicYears      AcademicYear[]
+  students           Student[]
+}
+
+model Campus {
+  id             String       @id @default(uuid())
+  institutionId  String
+  name           String
+  code           String
+  address        String?
+  city           String
+  status         String       @default("Active")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  institution    Institution  @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  users          User[]
+  sections       Section[]
+}
+
+// -------------------------------------------------------------
+// 2. PRODUCT ECOSYSTEM & ENTITLEMENTS
+// -------------------------------------------------------------
+
+enum ProductStatus {
+  Active
+  Available
+  Trial
+  ComingSoon
+  UpgradeRequired
+}
+
+model Product {
+  id              String               @id // academics, lms, finance, admissions, hrms, etc.
+  name            String
+  fullName        String
+  category        String               // core-academic, finance-admin, campus-operations, etc.
+  tagline         String
+  description     String
+  keyCapabilities String[]
+  plan            String               @default("Professional")
+  pricing         String?
+  modulesCount    Int                  @default(6)
+  route           String
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  entitlements    ProductEntitlement[]
+  userRoles       UserProductRole[]
+}
+
+enum EntitlementStatus {
+  Active
+  Trial
+  Suspended
+  Expired
+}
+
+model ProductEntitlement {
+  id             String            @id @default(uuid())
+  organizationId String
+  productId      String
+  status         EntitlementStatus @default(Active)
+  plan           String            @default("Professional")
+  startDate      DateTime          @default(now())
+  endDate        DateTime?
+  limits         Json?             // maxStudents, maxStorageGB, etc.
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, productId])
+}
+
+// -------------------------------------------------------------
+// 3. SINGLE IDENTITY & PRODUCT-SPECIFIC RBAC
+// -------------------------------------------------------------
+
+enum PlatformRole {
+  SuperAdmin
+  OrganizationAdmin
+  CampusAdmin
+  Member
+}
+
+model User {
+  id                String            @id @default(uuid())
+  organizationId    String
+  campusId          String?
+  assignedCampusIds String[]          @default([])
+  email             String            @unique
+  passwordHash      String?
+  name              String
+  avatarUrl         String?
+  mobile            String?
+  platformRole      PlatformRole      @default(Member)
+  authProvider      String            @default("email") // email, google
+  status            String            @default("Active")
+  lastLoginAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campus            Campus?           @relation(fields: [campusId], references: [id], onDelete: SetNull)
+  productRoles      UserProductRole[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model TeamInvite {
+  id             String       @id @default(uuid())
+  organizationId String
+  email          String
+  name           String?
+  jobTitle       String?
+  platformRole   PlatformRole @default(Member)
+  productRoles   Json?
+  status         String       @default("pending") // pending, sent, accepted
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, email])
+}
+
+model Role {
+  id             String            @id @default(uuid())
+  name           String
+  description    String?
+  productId      String
+  organizationId String?           // null = system template, string = custom role
+  isSystem       Boolean           @default(false)
+  status         String            @default("Active")
+  permissions    String[]          @default([])
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  userProductRoles UserProductRole[]
+
+  @@unique([organizationId, productId, name])
+}
+
+model UserProductRole {
+  id        String   @id @default(uuid())
+  userId    String
+  productId String
+  roleId    String?
+  roleName  String   // e.g., Academics: Teacher, LMS: Instructor, Finance: Controller
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  role      Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, productId])
+}
+
+// -------------------------------------------------------------
+// 4. ACADEMICS PRODUCT DOMAIN
+// -------------------------------------------------------------
+
+model AcademicYear {
+  id              String       @id @default(uuid())
+  institutionId   String
+  name            String       // 2026–27
+  startDate       DateTime
+  endDate         DateTime
+  isCurrent       Boolean      @default(false)
+  status          String       @default("Active") // Active, Closed, Upcoming
+  admissionStatus String       @default("Open")   // Open, Closed, Waitlist
+  createdAt       DateTime     @default(now())
+
+  institution     Institution  @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  programs        Program[]
+  courses         Course[]
+  classes         ClassLevel[]
+}
+
+model Program {
+  id                 String       @id @default(uuid())
+  academicYearId     String
+  name               String       // CBSE School Education, B.Tech Engineering, MBA
+  code               String       // PROG-CBSE, CSE-2026
+  level              String       // K-12, Higher Ed, Professional
+  description        String?
+  durationYears      Int          @default(2)
+  admissionAvailable Boolean      @default(true)
+  intakeCapacity     Int          @default(120)
+  status             String       @default("Active")
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  academicYear       AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  courses            Course[]
+}
+
+model Course {
+  id                 String              @id @default(uuid())
+  programId          String
+  academicYearId     String?
+  name               String              // Higher Secondary — Science, Secondary Education, B.Tech CSE
+  code               String              // CRS-SCI-11, CRS-CSE
+  department         String?             // Science, Engineering, Commerce
+  duration           String?             // 2 Years, 4 Years
+  credits            Int                 @default(4)
+  admissionAvailable Boolean             @default(true)
+  intakeCapacity     Int                 @default(60)
+  status             String              @default("Active")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  program            Program             @relation(fields: [programId], references: [id], onDelete: Cascade)
+  academicYear       AcademicYear?       @relation(fields: [academicYearId], references: [id], onDelete: SetNull)
+  classes            ClassLevel[]
+  curriculum         CurriculumSubject[]
+}
+
+model ClassLevel {
+  id             String              @id @default(uuid())
+  courseId       String
+  academicYearId String?
+  name           String              // Class 10, Class 12, Semester 1, First Year
+  code           String              // GR-10, SEM-01
+  levelOrder     Int                 @default(1)
+  status         String              @default("Active")
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  course         Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  academicYear   AcademicYear?       @relation(fields: [academicYearId], references: [id], onDelete: SetNull)
+  sections       Section[]
+  curriculum     CurriculumSubject[]
+}
+
+model Section {
+  id              String       @id @default(uuid())
+  classId         String
+  campusId        String?
+  name            String       // Section A, Section B
+  room            String?      // Room 301, Block C
+  classTeacher    String?      // Faculty name
+  capacity        Int          @default(40)
+  currentStrength Int          @default(0)
+  status          String       @default("Active")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  class           ClassLevel   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  campus          Campus?      @relation(fields: [campusId], references: [id], onDelete: SetNull)
+  enrolments      Enrolment[]
+}
+
+model Subject {
+  id              String                   @id @default(uuid())
+  name            String                   // Physics, Chemistry, Mathematics, English Core
+  code            String                   @unique // PHY-042, MAT-041
+  department      String                   // Science, Mathematics, Languages
+  type            String                   @default("Theory") // Theory, Theory + Practical, Practical, Language
+  credits         Int                      @default(4)
+  weeklyHours     Int                      @default(5)
+  status          String                   @default("Active")
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  curriculum      CurriculumSubject[]
+  studentSubjects StudentSubjectEnrolment[]
+}
+
+model CurriculumSubject {
+  id             String      @id @default(uuid())
+  courseId       String
+  subjectId      String
+  classId        String?
+  subjectType    String      @default("Compulsory") // Compulsory, Elective, Optional
+  semester       String?     // Sem 1, Annual
+  minCredits     Int?
+  maxCredits     Int?
+  createdAt      DateTime    @default(now())
+
+  course         Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  subject        Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  class          ClassLevel? @relation(fields: [classId], references: [id], onDelete: SetNull)
+
+  @@unique([courseId, subjectId, classId])
+}
+
+// -------------------------------------------------------------
+// 5. STUDENTS (SIS) & ENROLMENT DOMAIN
+// -------------------------------------------------------------
+
+model Student {
+  id            String       @id @default(uuid())
+  institutionId String
+  studentIdNo   String       @unique // STU-8921
+  firstName     String
+  lastName      String
+  email         String?
+  phone         String?
+  dateOfBirth   DateTime?
+  gender        String?
+  status        String       @default("Active")
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  institution   Institution  @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  enrolments    Enrolment[]
+  invoices      Invoice[]
+}
+
+model Enrolment {
+  id              String                    @id @default(uuid())
+  studentId       String
+  sectionId       String
+  academicYear    String?
+  status          String                    @default("Active")
+  enrolledAt      DateTime                  @default(now())
+
+  student         Student                   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section         Section                   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  subjectMappings StudentSubjectEnrolment[]
+}
+
+model StudentSubjectEnrolment {
+  id          String    @id @default(uuid())
+  enrolmentId String
+  subjectId   String
+  isElective  Boolean   @default(false)
+  status      String    @default("Active")
+  enrolledAt  DateTime  @default(now())
+
+  enrolment   Enrolment @relation(fields: [enrolmentId], references: [id], onDelete: Cascade)
+  subject     Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([enrolmentId, subjectId])
+}
+
+// -------------------------------------------------------------
+// 6. LMS PRODUCT DOMAIN
+// -------------------------------------------------------------
+
+model LMSCourse {
+  id          String          @id @default(uuid())
+  title       String
+  description String?
+  instructor  String
+  level       String          @default("Intermediate")
+  published   Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  modules     LMSModule[]
+  assignments LMSAssignment[]
+}
+
+model LMSModule {
+  id        String      @id @default(uuid())
+  courseId  String
+  title     String
+  order     Int         @default(1)
+
+  course    LMSCourse   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons   LMSLesson[]
+}
+
+model LMSLesson {
+  id          String    @id @default(uuid())
+  moduleId    String
+  title       String
+  durationMin Int       @default(20)
+  contentUrl  String?
+
+  module      LMSModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+}
+
+model LMSAssignment {
+  id          String    @id @default(uuid())
+  courseId    String
+  title       String
+  dueDate     DateTime
+  maxMarks    Int       @default(100)
+
+  course      LMSCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------------------------------------------
+// 7. FINANCE PRODUCT DOMAIN
+// -------------------------------------------------------------
+
+model FeeStructure {
+  id        String         @id @default(uuid())
+  name      String         // Grade 11 Science 2026-27
+  totalAmount Float
+  currency  String         @default("INR")
+  components FeeComponent[]
+  createdAt DateTime       @default(now())
+}
+
+model FeeComponent {
+  id             String       @id @default(uuid())
+  feeStructureId String
+  name           String       // Tuition, Lab, Library
+  amount         Float
+
+  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id], onDelete: Cascade)
+}
+
+model Invoice {
+  id          String    @id @default(uuid())
+  studentId   String
+  invoiceNo   String    @unique
+  amount      Float
+  status      String    @default("Unpaid") // Paid, Partial, Unpaid
+  dueDate     DateTime
+  createdAt   DateTime  @default(now())
+
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  payments    Payment[]
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  invoiceId   String
+  receiptNo   String   @unique
+  amount      Float
+  paymentMode String   // Online, UPI, Cash, Cheque
+  paidAt      DateTime @default(now())
+
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------------------------------------------
+// 8. ADMISSIONS PRODUCT DOMAIN
+// -------------------------------------------------------------
+
+model AdmissionsLead {
+  id             String   @id @default(uuid())
+  candidateName  String
+  email          String
+  phone          String
+  targetProgram  String
+  status         String   @default("New Lead")
+  counselor      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// -------------------------------------------------------------
+// 9. AUDIT & NOTIFICATIONS
+// -------------------------------------------------------------
+
+model AuditLog {
+  id             String        @id @default(uuid())
+  organizationId String
+  userId         String?
+  action         String
+  product        String
+  details        String
+  ipAddress      String?
+  createdAt      DateTime      @default(now())
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+}

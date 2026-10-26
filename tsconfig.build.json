@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "**/*spec.ts",
+    "src/generated",
+    "src/common/abac",
+    "src/common/redis",
+    "src/common/storage",
+    "src/modules/academic",
+    "src/modules/audit",
+    "src/modules/branding",
+    "src/modules/campus",
+    "src/modules/dashboard",
+    "src/modules/health",
+    "src/modules/hrms",
+    "src/modules/identity",
+    "src/modules/institution",
+    "src/modules/parent",
+    "src/modules/admissions/controllers",
+    "src/modules/admissions/dto",
+    "src/modules/admissions/repositories",
+    "src/modules/admissions/services"
+  ]
+}

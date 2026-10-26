@@ -1,0 +1,44 @@
+﻿services:
+  - type: web
+    name: mycampace-backend
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm run start:prod
+    healthCheckPath: /api/docs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mycampace-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: mycampace-redis
+          property: connectionString
+      - key: REDIS_DISABLED
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: CORS_ORIGIN
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+
+  - type: keyvalue
+    name: mycampace-redis
+    plan: free
+    ipAllowList: []
+
+databases:
+  - name: mycampace-db
+    plan: basic-256mb
